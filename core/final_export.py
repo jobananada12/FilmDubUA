@@ -21,8 +21,6 @@ def export_final(video: str, audio: str, reaction: str, output: str, subtitles: 
     if separate_audio and not separate_audio.exists():
         raise FileNotFoundError(str(separate_audio))
 
-    # Build the 9:16 canvas first.  The reaction video is intentionally muted;
-    # the audio comes from the already-dubbed main clip.
     base = '[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[base]'
     filters = [base]
     if subtitles:
@@ -33,12 +31,10 @@ def export_final(video: str, audio: str, reaction: str, output: str, subtitles: 
         base_label = 'base'
 
     if rx:
-        # Circular reaction bubble.  Crop to a square, scale it, then make
-        # pixels outside the circle transparent.
         size = max(160, min(900, int(1080 * float(reaction_scale))))
         filters.append(
-            f"[1:v]scale={size}:{size}:force_original_aspect_ratio=increase," 
-            f"crop={size}:{size},format=rgba," 
+            f"[1:v]scale={size}:{size}:force_original_aspect_ratio=increase,"
+            f"crop={size}:{size},format=rgba,"
             f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
             f"a='if(lte((X-{size}/2)*(X-{size}/2)+(Y-{size}/2)*(Y-{size}/2),({size}/2)*({size}/2),255,0)'[rx]"
         )
@@ -66,7 +62,18 @@ def export_final(video: str, audio: str, reaction: str, output: str, subtitles: 
                '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
                '-movflags', '+faststart', str(out)]
 
+    print('\n' + '=' * 80, flush=True)
+    print('FILMDUBUA FINAL EXPORT', flush=True)
+    print('FFmpeg command:', ' '.join(cmd), flush=True)
+    print('=' * 80, flush=True)
+
     result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout, flush=True)
+    if result.stderr:
+        print(result.stderr, flush=True)
+    print('=' * 80, flush=True)
+
     if result.returncode:
         raise FinalExportError(result.stderr[-6000:] or 'FFmpeg не зміг зібрати фінальний ролик')
     if not out.exists() or out.stat().st_size == 0:
