@@ -1,195 +1,99 @@
 import os
-import shutil
 import subprocess
 import tempfile
-import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+try:
+    import pyttsx3
+except ImportError:
+    pyttsx3 = None
 
-import pyttsx3
-
-APP_TITLE = "FilmDubUA — українська озвучка"
-
-
-def ffmpeg_path():
-    return shutil.which("ffmpeg")
-
-
-def get_voices():
-    engine = pyttsx3.init()
-    voices = engine.getProperty("voices")
-    engine.stop()
-    return voices
-
-
-def make_tts(text, output, voice_id, rate):
-    engine = pyttsx3.init()
-    if voice_id:
-        engine.setProperty("voice", voice_id)
-    engine.setProperty("rate", int(rate))
-    engine.setProperty("volume", 1.0)
-    engine.save_to_file(text, output)
-    engine.runAndWait()
-    engine.stop()
-
-
-def mux_video(video, audio, output, volume):
-    cmd = [
-        ffmpeg_path(), "-y", "-i", video, "-i", audio,
-        "-filter:a", f"volume={volume}",
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-        "-shortest", output,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr[-2500:])
-
-
-class App:
+class FilmDubUA:
     def __init__(self, root):
-        self.root = root
-        root.title(APP_TITLE)
-        root.geometry("900x650")
-        root.minsize(760, 560)
-
-        self.video = tk.StringVar()
-        self.output = tk.StringVar()
-        self.status = tk.StringVar(value="Готово")
-        self.rate = tk.IntVar(value=165)
-        self.volume = tk.DoubleVar(value=1.0)
-        self.voices = []
-
-        top = ttk.Frame(root, padding=18)
-        top.pack(fill="both", expand=True)
-
-        ttk.Label(top, text="FilmDubUA", font=("Segoe UI", 24, "bold")).pack(anchor="w")
-        ttk.Label(top, text="Безкоштовна українська озвучка відео", font=("Segoe UI", 11)).pack(anchor="w", pady=(0, 16))
-
-        file_frame = ttk.LabelFrame(top, text="1. Відео", padding=12)
-        file_frame.pack(fill="x", pady=6)
-        ttk.Entry(file_frame, textvariable=self.video).pack(side="left", fill="x", expand=True)
-        ttk.Button(file_frame, text="Вибрати…", command=self.choose_video).pack(side="left", padx=(8, 0))
-
-        script_frame = ttk.LabelFrame(top, text="2. Текст озвучки", padding=12)
-        script_frame.pack(fill="both", expand=True, pady=6)
-        self.script = tk.Text(script_frame, height=12, wrap="word", font=("Segoe UI", 12))
-        self.script.pack(fill="both", expand=True)
-        self.script.insert("1.0", "Встав сюди текст української озвучки…")
-
-        settings = ttk.LabelFrame(top, text="3. Голос і налаштування", padding=12)
-        settings.pack(fill="x", pady=6)
-        row = ttk.Frame(settings)
-        row.pack(fill="x")
-        ttk.Label(row, text="Голос:").pack(side="left")
-        self.voice_combo = ttk.Combobox(row, state="readonly", width=48)
-        self.voice_combo.pack(side="left", padx=8)
-        ttk.Button(row, text="Оновити", command=self.load_voices).pack(side="left")
-
-        row2 = ttk.Frame(settings)
-        row2.pack(fill="x", pady=(10, 0))
-        ttk.Label(row2, text="Швидкість:").pack(side="left")
-        ttk.Scale(row2, from_=80, to=240, variable=self.rate, orient="horizontal", length=220).pack(side="left", padx=8)
-        ttk.Label(row2, textvariable=self.rate).pack(side="left")
-        ttk.Label(row2, text="   Гучність:").pack(side="left")
-        ttk.Scale(row2, from_=0.2, to=2.0, variable=self.volume, orient="horizontal", length=180).pack(side="left", padx=8)
-        ttk.Label(row2, text="1.0×").pack(side="left")
-
-        out = ttk.Frame(top)
-        out.pack(fill="x", pady=6)
-        ttk.Label(out, text="Файл результату:").pack(side="left")
-        ttk.Entry(out, textvariable=self.output).pack(side="left", fill="x", expand=True, padx=8)
-        ttk.Button(out, text="Зберегти як…", command=self.choose_output).pack(side="left")
-
-        bottom = ttk.Frame(top)
-        bottom.pack(fill="x", pady=(10, 0))
-        self.progress = ttk.Progressbar(bottom, mode="indeterminate")
-        self.progress.pack(fill="x", side="top")
-        ttk.Label(bottom, textvariable=self.status).pack(anchor="w", pady=5)
-        self.export_btn = ttk.Button(bottom, text="🎬 СТВОРИТИ ОЗВУЧЕНЕ ВІДЕО", command=self.export)
-        self.export_btn.pack(fill="x", ipady=8)
-
-        self.load_voices()
-
-    def choose_video(self):
-        path = filedialog.askopenfilename(filetypes=[("Відео", "*.mp4 *.mkv *.mov *.avi"), ("Усі файли", "*.*")])
-        if path:
-            self.video.set(path)
-            base = os.path.splitext(path)[0]
-            self.output.set(base + "_dubbed.mp4")
-
-    def choose_output(self):
-        path = filedialog.asksaveasfilename(defaultextension=".mp4", filetypes=[("MP4", "*.mp4")])
-        if path:
-            self.output.set(path)
-
+        self.root=root; self.root.title('FilmDubUA — Mini Dubbing Studio'); self.root.geometry('1050x720'); self.video=''; self.build()
+    def build(self):
+        top=ttk.Frame(self.root,padding=12); top.pack(fill='x')
+        ttk.Label(top,text='🎬 FilmDubUA',font=('Segoe UI',22,'bold')).pack(side='left'); ttk.Button(top,text='Відкрити відео',command=self.open_video).pack(side='right')
+        self.video_label=ttk.Label(self.root,text='Відео не вибрано',padding=(12,0)); self.video_label.pack(fill='x')
+        main=ttk.Panedwindow(self.root,orient='horizontal'); main.pack(fill='both',expand=True,padx=12,pady=8)
+        left=ttk.Frame(main,padding=10); right=ttk.Frame(main,padding=10); main.add(left,weight=3); main.add(right,weight=2)
+        ttk.Label(left,text='Таймлайн реплік',font=('Segoe UI',14,'bold')).pack(anchor='w')
+        self.tree=ttk.Treeview(left,columns=('start','end','text'),show='headings',height=20)
+        for c,t,w in [('start','Початок',90),('end','Кінець',90),('text','Текст',520)]: self.tree.heading(c,text=t); self.tree.column(c,width=w)
+        self.tree.pack(fill='both',expand=True); self.tree.bind('<<TreeviewSelect>>',self.select_row)
+        b=ttk.Frame(left); b.pack(fill='x',pady=8)
+        ttk.Button(b,text='+ Додати',command=self.add_row).pack(side='left'); ttk.Button(b,text='Видалити',command=self.delete_row).pack(side='left',padx=5); ttk.Button(b,text='Очистити',command=self.clear_rows).pack(side='left')
+        ttk.Label(right,text='Редактор',font=('Segoe UI',14,'bold')).pack(anchor='w')
+        f=ttk.Frame(right); f.pack(fill='x',pady=8)
+        ttk.Label(f,text='Початок (сек.)').grid(row=0,column=0,sticky='w'); ttk.Label(f,text='Кінець (сек.)').grid(row=1,column=0,sticky='w')
+        self.start=tk.StringVar(value='0'); self.end=tk.StringVar(value='3'); ttk.Entry(f,textvariable=self.start,width=12).grid(row=0,column=1,padx=8,pady=3); ttk.Entry(f,textvariable=self.end,width=12).grid(row=1,column=1,padx=8,pady=3)
+        ttk.Label(right,text='Текст репліки').pack(anchor='w'); self.text=tk.Text(right,height=8,wrap='word'); self.text.pack(fill='x',pady=5); ttk.Button(right,text='Застосувати',command=self.apply).pack(anchor='e')
+        ttk.Separator(right).pack(fill='x',pady=14); ttk.Label(right,text='Голос',font=('Segoe UI',14,'bold')).pack(anchor='w')
+        self.voice=ttk.Combobox(right,state='readonly'); self.voice.pack(fill='x',pady=6); self.load_voices()
+        ttk.Label(right,text='Швидкість').pack(anchor='w'); self.rate=tk.IntVar(value=165); ttk.Scale(right,from_=80,to=240,variable=self.rate,orient='horizontal').pack(fill='x')
+        ttk.Button(right,text='▶ Прослухати',command=self.preview).pack(fill='x',pady=5); ttk.Button(right,text='🎙 Експорт MP4',command=self.export).pack(fill='x',pady=5)
+        self.status=ttk.Label(right,text='Готово'); self.status.pack(anchor='w',pady=8); self.add_row()
     def load_voices(self):
+        if not pyttsx3: self.voice['values']=['pyttsx3 не встановлено']; self.voice.current(0); return
         try:
-            self.voices = get_voices()
-            names = []
-            for v in self.voices:
-                name = getattr(v, "name", None) or getattr(v, "id", "Unknown")
-                names.append(str(name))
-            self.voice_combo["values"] = names
-            if names:
-                self.voice_combo.current(0)
-            self.status.set(f"Знайдено голосів Windows: {len(names)}")
-        except Exception as e:
-            self.status.set("Не вдалося отримати голоси")
-            messagebox.showerror("Помилка TTS", str(e))
-
+            e=pyttsx3.init(); vs=e.getProperty('voices'); self.voice['values']=[getattr(v,'name',str(v)) for v in vs];
+            if vs:self.voice.current(0)
+            e.stop()
+        except Exception:self.voice['values']=['Системний голос Windows']; self.voice.current(0)
+    def open_video(self):
+        p=filedialog.askopenfilename(filetypes=[('Відео','*.mp4 *.mkv *.mov *.avi'),('Усі файли','*.*')]);
+        if p:self.video=p; self.video_label.config(text=os.path.basename(p)); self.status.config(text='Відео завантажено')
+    def add_row(self):
+        i=self.tree.insert('','end',values=('0.0','3.0','Нова репліка')); self.tree.selection_set(i); self.select_row()
+    def delete_row(self):
+        for i in self.tree.selection():self.tree.delete(i)
+    def clear_rows(self):
+        for i in self.tree.get_children():self.tree.delete(i)
+        self.add_row()
+    def select_row(self,_=None):
+        s=self.tree.selection()
+        if s:
+            v=self.tree.item(s[0],'values'); self.start.set(v[0]); self.end.set(v[1]); self.text.delete('1.0','end'); self.text.insert('1.0',v[2])
+    def apply(self):
+        s=self.tree.selection()
+        if not s:return
+        try: float(self.start.get()); float(self.end.get())
+        except ValueError: messagebox.showerror('Помилка','Час має бути числом.'); return
+        self.tree.item(s[0],values=(self.start.get(),self.end.get(),self.text.get('1.0','end').strip()))
+    def engine(self):
+        if not pyttsx3:raise RuntimeError('Встанови pyttsx3: pip install pyttsx3')
+        e=pyttsx3.init(); e.setProperty('rate',int(self.rate.get())); vs=e.getProperty('voices'); idx=self.voice.current()
+        if 0<=idx<len(vs):e.setProperty('voice',vs[idx].id)
+        return e
+    def preview(self):
+        t=self.text.get('1.0','end').strip()
+        if not t:return
+        try:e=self.engine(); e.say(t); e.runAndWait(); e.stop()
+        except Exception as x:messagebox.showerror('Озвучка',str(x))
     def export(self):
-        if not self.video.get() or not os.path.isfile(self.video.get()):
-            messagebox.showwarning("Відео", "Спочатку вибери відео.")
-            return
-        text = self.script.get("1.0", "end").strip()
-        if not text or text.startswith("Встав сюди"):
-            messagebox.showwarning("Текст", "Введи текст для озвучки.")
-            return
-        if not ffmpeg_path():
-            messagebox.showerror("FFmpeg не знайдено", "Встанови FFmpeg та додай його до PATH, потім перезапусти програму.")
-            return
-        if not self.output.get():
-            self.choose_output()
-        if not self.output.get():
-            return
-
-        self.export_btn.config(state="disabled")
-        self.progress.start(12)
-        self.status.set("Створюю голос…")
-        threading.Thread(target=self._worker, args=(text,), daemon=True).start()
-
-    def _worker(self, text):
+        if not self.video:messagebox.showwarning('FilmDubUA','Спочатку вибери відео.');return
+        rows=[]
+        for i in self.tree.get_children():
+            a,b,t=self.tree.item(i,'values')
+            if t.strip():rows.append((float(a),float(b),t.strip()))
+        if not rows:messagebox.showwarning('FilmDubUA','Додай репліку.');return
+        out=filedialog.asksaveasfilename(defaultextension='.mp4',filetypes=[('MP4','*.mp4')],initialfile='filmdubua_output.mp4')
+        if not out:return
+        self.status.config(text='Створюю озвучку...'); self.root.update()
         try:
             with tempfile.TemporaryDirectory() as td:
-                audio = os.path.join(td, "voice.wav")
-                idx = self.voice_combo.current()
-                voice_id = self.voices[idx].id if 0 <= idx < len(self.voices) else None
-                make_tts(text, audio, voice_id, self.rate.get())
-                self.root.after(0, lambda: self.status.set("Збираю відео…"))
-                mux_video(self.video.get(), audio, self.output.get(), self.volume.get())
-            self.root.after(0, self.done)
-        except Exception as e:
-            self.root.after(0, lambda: self.failed(str(e)))
+                tracks=[]
+                for n,(_,_,t) in enumerate(rows):
+                    wav=os.path.join(td,f'voice_{n}.wav'); e=self.engine(); e.save_to_file(t,wav); e.runAndWait(); e.stop(); tracks.append(wav)
+                ins=[]; fs=[]
+                for n,(row,wav) in enumerate(zip(rows,tracks)):
+                    ins += ['-i',wav]; d=max(0,int(row[0]*1000)); fs.append(f'[{n+1}:a]adelay={d}|{d}[a{n}]')
+                labels=''.join(f'[a{n}]' for n in range(len(rows))); fs.append(f'{labels}amix=inputs={len(rows)}:duration=longest[voice]')
+                cmd=['ffmpeg','-y','-i',self.video]+ins+['-filter_complex',';'.join(fs),'-map','0:v:0','-map','[voice]','-c:v','copy','-c:a','aac','-shortest',out]
+                subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
+            self.status.config(text='Готово!'); messagebox.showinfo('FilmDubUA','Відео створено:\n'+out)
+        except FileNotFoundError:messagebox.showerror('FFmpeg','FFmpeg не знайдений у PATH.')
+        except Exception as x:messagebox.showerror('Експорт',str(x)); self.status.config(text='Помилка')
 
-    def done(self):
-        self.progress.stop()
-        self.export_btn.config(state="normal")
-        self.status.set("✅ Готово: " + self.output.get())
-        messagebox.showinfo("Готово", "Озвучене відео створено!")
-
-    def failed(self, error):
-        self.progress.stop()
-        self.export_btn.config(state="normal")
-        self.status.set("❌ Помилка")
-        messagebox.showerror("Помилка", error)
-
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    try:
-        root.iconname("FilmDubUA")
-    except Exception:
-        pass
-    App(root)
-    root.mainloop()
+if __name__=='__main__':
+    root=tk.Tk(); FilmDubUA(root); root.mainloop()
