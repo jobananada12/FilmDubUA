@@ -32,18 +32,18 @@ def export_final(video: str, audio: str, reaction: str, output: str, subtitles: 
 
     if rx:
         size = max(160, min(900, int(1080 * float(reaction_scale))))
+        radius = size / 2
+        circle = f"if(lte((X-{radius})*(X-{radius})+(Y-{radius})*(Y-{radius}),{radius}*{radius}),255,0)"
         filters.append(
             f"[1:v]scale={size}:{size}:force_original_aspect_ratio=increase,"
             f"crop={size}:{size},format=rgba,"
-            f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
-            f"a='if(lte((X-{size}/2)*(X-{size}/2)+(Y-{size}/2)*(Y-{size}/2),({size}/2)*({size}/2),255,0)'[rx]"
+            f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='{circle}'[rx]"
         )
         filters.append(f"[{base_label}][rx]overlay=(W-w)/2:H-h-35:format=auto[v]")
         filter_graph = ';'.join(filters)
         inputs = ['-i', str(main), '-i', str(rx)]
-        audio_map = str(separate_audio) if separate_audio else None
-        if audio_map:
-            inputs += ['-i', audio_map]
+        if separate_audio:
+            inputs += ['-i', str(separate_audio)]
             audio_index = '2:a:0'
         else:
             audio_index = '0:a:0?'
