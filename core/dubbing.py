@@ -26,25 +26,27 @@ def mix_dialogue(video_path: str, background_path: str, voice_path: str,
         raise DubbingError("Початок репліки не може бути від'ємним")
 
     delay = int(start_ms)
+    voice_volume = max(0.0, float(volume))
     cmd = [
         "ffmpeg", "-y", "-i", str(video), "-i", str(background), "-i", str(voice),
         "-filter_complex",
-        f"[2:a]volume={max(0.0, float(volume))},adelay={delay}|{delay}[voice];"
-        "[1:a][voice]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix]",
+        f"[1:a]volume=0.55[bg];"
+        f"[2:a]volume={voice_volume * 1.5:.3f},adelay={delay}|{delay}[voice];"
+        "[bg][voice]amix=inputs=2:duration=first:dropout_transition=0:normalize=1[mix]",
         "-map", "0:v:0", "-map", "[mix]", "-c:v", "copy",
         "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart",
         str(output),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        raise DubbingError(proc.stderr[-5000:] or "FFmpeg не зміг зібрати дубльований кліп")
+        raise DubbingError(proc.stderr[-5000:] or "FFmpeg не зміг зібрати дубльовану репліку")
     if not output.exists() or output.stat().st_size == 0:
         raise DubbingError("FFmpeg не створив дубльований кліп")
     return str(output)
 
 
 def mix_dialogues(video_path: str, background_path: str, dialogues, output_path: str) -> str:
-    """Mix every generated dialogue into one scene at its relative start time."""
+    """Mix every generated dialogue into one selected scene at its relative start time."""
     video = Path(video_path).resolve()
     background = Path(background_path).resolve()
     output = Path(output_path).resolve()
@@ -59,19 +61,19 @@ def mix_dialogues(video_path: str, background_path: str, dialogues, output_path:
     for d in ready:
         cmd += ['-i', str(Path(d.audio_path).resolve())]
 
-    filters = []
-    mix_inputs = ['1:a']
+    filters = ['[1:a]volume=0.55[bg]']
+    mix_inputs = ['[bg]']
     for index, d in enumerate(ready, start=2):
         label = f'v{index}'
         delay = max(0, int(d.start_ms))
-        volume = max(0.0, float(getattr(d, 'volume', 1.0)))
-        filters.append(f'[{index}:a]volume={volume},adelay={delay}|{delay}[{label}]')
+        volume = max(0.0, float(getattr(d, 'volume', 1.0))) * 1.5
+        # Stereo-safe delay and a small gain make generated speech clearly audible.
+        filters.append(f'[{index}:a]volume={volume:.3f},adelay={delay}|{delay}[{label}]')
         mix_inputs.append(f'[{label}]')
 
-    inputs = len(mix_inputs)
     filters.append(
-        ''.join(f'[{x}]' if ':' in x else x for x in mix_inputs)
-        + f'amix=inputs={inputs}:duration=first:dropout_transition=0:normalize=0[mix]'
+        ''.join(mix_inputs)
+        + f'amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0:normalize=1[mix]'
     )
 
     cmd += [
