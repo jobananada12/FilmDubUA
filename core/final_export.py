@@ -7,7 +7,7 @@ class FinalExportError(RuntimeError):
 
 
 def export_final(video: str, audio: str, reaction: str, output: str, subtitles: str = '', reaction_scale: float = .34) -> str:
-    """Compose a 9:16 final video: main clip on top, user video on bottom, black padding when needed."""
+    """Compose a 9:16 final video: main clip fills the top panel, user video is padded on bottom."""
     main = Path(video).resolve()
     rx = Path(reaction).resolve() if reaction else None
     separate_audio = Path(audio).resolve() if audio else None
@@ -22,9 +22,10 @@ def export_final(video: str, audio: str, reaction: str, output: str, subtitles: 
         raise FileNotFoundError(str(separate_audio))
 
     # 1080x1920 canvas split into two 1080x960 panels.
-    # Both videos keep their original aspect ratio: no cropping or stretching.
+    # Main film fills the entire top panel; its sides may be cropped.
+    # User video keeps its aspect ratio and gets black padding when smaller.
     filters = [
-        "[0:v]scale=1080:960:force_original_aspect_ratio=decrease,pad=1080:960:(ow-iw)/2:(oh-ih)/2:color=black[top]"
+        "[0:v]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960:(iw-1080)/2:(ih-960)/2[top]"
     ]
 
     if subtitles:
@@ -48,7 +49,6 @@ def export_final(video: str, audio: str, reaction: str, output: str, subtitles: 
         else:
             audio_index = '0:a:0?'
     else:
-        # No reaction video: keep the main clip centered in the upper panel and black below.
         filters.append("color=c=black:s=1080x960:d=86400[bottom]")
         filters.append(f"[{top_label}][bottom]vstack=inputs=2[v]")
         filter_graph = ';'.join(filters)
@@ -67,7 +67,7 @@ def export_final(video: str, audio: str, reaction: str, output: str, subtitles: 
 
     print('\n' + '=' * 80, flush=True)
     print('FILMDUBUA FINAL EXPORT', flush=True)
-    print('Layout: MAIN TOP 1080x960 + USER VIDEO BOTTOM 1080x960', flush=True)
+    print('Layout: MAIN TOP FILLS 1080x960 + USER VIDEO BOTTOM 1080x960 WITH BLACK PADDING', flush=True)
     print('FFmpeg command:', ' '.join(cmd), flush=True)
     print('=' * 80, flush=True)
 
