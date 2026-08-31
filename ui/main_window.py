@@ -4,7 +4,7 @@ import tempfile
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QFileDialog, QCheckBox, QLabel, QGroupBox, QMessageBox
+    QFileDialog, QCheckBox, QLabel, QGroupBox
 )
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtCore import QThread, Signal
@@ -18,6 +18,49 @@ from ui.dialogue_editor import DialogueEditor
 from core.media import supported_video_filter
 
 
+class MontageWorker(QThread):
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, input_path, start_ms, end_ms, output_path):
+        super().__init__()
+        self.input_path = input_path
+        self.start_ms = int(start_ms)
+        self.end_ms = int(end_ms)
+        self.output_path = output_path
+
+    def run(self):
+        try:
+            src = Path(self.input_path).resolve()
+            if not src.exists():
+                raise FileNotFoundError(str(src))
+            if self.end_ms <= self.start_ms:
+                raise ValueError('Кінець уривка має бути після початку')
+
+            start = self.start_ms / 1000.0
+            duration = (self.end_ms - self.start_ms) / 1000.0
+
+            # Re-encode so the selected start/end are frame-accurate instead
+            # of depending on the source video's keyframes.
+            cmd = [
+                'ffmpeg', '-y', '-ss', str(start), '-i', str(src),
+                '-t', str(duration),
+                '-map', '0:v:0', '-map', '0:a:0?',
+                '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+                '-c:a', 'aac', '-b:a', '192k',
+                '-movflags', '+faststart', str(self.output_path)
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr[-4000:] or 'FFmpeg не зміг створити основу монтажу')
+            if not Path(self.output_path).exists() or Path(self.output_path).stat().st_size == 0:
+                raise RuntimeError('FFmpeg не створив файл основи монтажу')
+
+            self.finished.emit(str(self.output_path))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class SeparationWorker(QThread):
     finished = Signal(str)
     failed = Signal(str)
@@ -29,7 +72,6 @@ class SeparationWorker(QThread):
         self.end_ms = int(end_ms)
 
     def run(self):
-        temp_dir = None
         try:
             src = Path(self.input_path).resolve()
             if not src.exists():
@@ -65,8 +107,11 @@ class MainWindow(QMainWindow):
         self.resize(1200, 820)
 
         self.movie_path = ''
+        self.montage_path = ''
         self.background_path = ''
         self.worker = None
+        self.montage_worker = None
+        self.montage_temp_dir = None
         self.selection_start_ms = 0
         self.selection_end_ms = 0
         self.selection_ready = False
@@ -140,6 +185,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self.movie_path = path
+        self.montage_path = ''
         self.background_path = ''
         self.selection_ready = False
         self.montage_ready = False
@@ -154,6 +200,7 @@ class MainWindow(QMainWindow):
         self.selection_end_ms = int(end_ms)
         self.selection_ready = self.selection_end_ms > self.selection_start_ms
         self.montage_ready = False
+        self.montage_path = ''
         self.background_path = ''
         self.previewing_selection = False
         self.player.player.pause()
@@ -200,15 +247,45 @@ class MainWindow(QMainWindow):
         if not self.selection_ready:
             self.status.setText('Спочатку встановіть Початок і Кінець уривка')
             return
+        if self.montage_worker and self.montage_worker.isRunning():
+            return
 
+        self.montage_temp_dir = Path(tempfile.mkdtemp(prefix='filmdubua_montage_'))
+        output_path = self.montage_temp_dir / 'base_clip.mp4'
+        self.montage_ready = False
+        self.montage_path = ''
+        self.status.setText('🧩 Створюю реальний файл основи монтажу через FFmpeg...')
+        self.montage_worker = MontageWorker(
+            self.movie_path,
+            self.selection_start_ms,
+            self.selection_end_ms,
+            output_path,
+        )
+        self.montage_worker.finished.connect(self.montage_done)
+        self.montage_worker.failed.connect(self.montage_failed)
+        self.montage_worker.start()
+
+    def montage_done(self, path):
+        self.montage_path = path
         self.montage_ready = True
         self.montage_status.setText(
-            f'🎬 Основа монтажу: {self.format_ms(self.selection_start_ms)} → '
+            f'🎬 Основа монтажу ГОТОВА: {self.format_ms(self.selection_start_ms)} → '
             f'{self.format_ms(self.selection_end_ms)}'
         )
         self.status.setText(
-            '✅ Уривок став основою монтажу. Оригінальний фільм не змінено. Експорту немає.'
+            f'✅ Реальний кліп створено: {path}. Оригінальний фільм не змінено.'
         )
+        # Keep the selected clip as the active preview source so the user can
+        # immediately inspect the actual montage base that was created.
+        self.player.open(path)
+        self.timeline.set_duration(self.selection_end_ms - self.selection_start_ms)
+        self.timeline.update_position(0)
+
+    def montage_failed(self, error):
+        self.montage_ready = False
+        self.montage_path = ''
+        self.montage_status.setText('Монтаж: не створено')
+        self.status.setText(f'❌ Не вдалося створити основу монтажу: {error}')
 
     def separate_selected_voice(self):
         if not self.movie_path:
@@ -217,7 +294,7 @@ class MainWindow(QMainWindow):
         if not self.selection_ready:
             self.status.setText('Спочатку виберіть Початок і Кінець')
             return
-        if not self.montage_ready:
+        if not self.montage_ready or not self.montage_path:
             self.status.setText('Спочатку зробіть уривок основою монтажу')
             return
         if self.worker and self.worker.isRunning():
@@ -233,9 +310,7 @@ class MainWindow(QMainWindow):
 
     def separation_done(self, background):
         self.background_path = background
-        self.status.setText(
-            f'✅ Фон вибраного уривка готовий: {background}'
-        )
+        self.status.setText(f'✅ Фон вибраного уривка готовий: {background}')
         self.montage_status.setText(
             '🎵 Основа готова: відео + фон без оригінального вокального шару. '
             'Далі — нові репліки.'
