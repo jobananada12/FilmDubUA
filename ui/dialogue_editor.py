@@ -3,8 +3,8 @@ import tempfile
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QLineEdit, QSpinBox, QPushButton, QLabel, QComboBox
 from core.dialogue import Dialogue, DialogueTrack
-from core.tts import windows_voices, synthesize_windows, TTSError
-from core.dubbing import mix_dialogue, DubbingError
+from core.tts import windows_voices, synthesize_windows
+from core.dubbing import mix_dialogue, mix_dialogues, DubbingError
 
 class DialogueEditor(QWidget):
     """Dialogue editor with local Windows SAPI/pyttsx3 voice generation."""
@@ -20,9 +20,11 @@ class DialogueEditor(QWidget):
         self.rate = QSpinBox(); self.rate.setRange(80, 300); self.rate.setValue(170); self.rate.setSuffix(' сл/хв')
         add = QPushButton('➕ Додати репліку'); remove = QPushButton('🗑 Видалити')
         generate = QPushButton('🔊 Згенерувати українську озвучку')
-        mix = QPushButton('🎬 Зібрати дубльований кліп')
+        mix = QPushButton('🎬 Зібрати дубльовану репліку')
+        mix_all = QPushButton('🎞️ Зібрати весь дубляж')
         generate.clicked.connect(self.generate_voice)
         mix.clicked.connect(self.mix_current_dialogue)
+        mix_all.clicked.connect(self.mix_all_dialogues)
         add.clicked.connect(self.add_dialogue); remove.clicked.connect(self.remove_dialogue)
         for w in (self.character, self.text, self.start, self.end):
             w.editingFinished.connect(self.apply_current)
@@ -44,7 +46,7 @@ class DialogueEditor(QWidget):
         voice_row.addWidget(QLabel('Голос')); voice_row.addWidget(self.voice, 1)
         voice_row.addWidget(QLabel('Швидкість')); voice_row.addWidget(self.rate)
         voice_row.addWidget(generate)
-        voice_row.addWidget(mix)
+        voice_row.addWidget(mix); voice_row.addWidget(mix_all)
         layout=QVBoxLayout(self); layout.addLayout(controls); layout.addLayout(voice_row); layout.addWidget(self.list)
 
     def refresh(self):
@@ -76,67 +78,65 @@ class DialogueEditor(QWidget):
     def generate_voice(self):
         row = self.list.currentRow()
         if row < 0:
-            self.status_message('Спочатку виберіть репліку')
-            return
+            self.status_message('Спочатку виберіть репліку'); return
         d = self.track.items[row]
         if not d.text.strip():
-            self.status_message('У репліці немає тексту')
-            return
+            self.status_message('У репліці немає тексту'); return
         if d.end_ms <= d.start_ms:
-            self.status_message('Кінець репліки має бути після початку')
-            return
+            self.status_message('Кінець репліки має бути після початку'); return
         try:
-            out_dir = Path(tempfile.mkdtemp(prefix='filmdubua_tts_'))
-            out = out_dir / f'dialogue_{row+1:03d}.wav'
+            out_dir = Path(tempfile.mkdtemp(prefix='filmdubua_tts_')); out = out_dir / f'dialogue_{row+1:03d}.wav'
             voice_id = self.voice.currentData() or ''
             synthesize_windows(d.text, str(out), voice_id=voice_id, rate=self.rate.value(), volume=d.volume)
-            d.audio_path = str(out)
-            self.refresh(); self.list.setCurrentRow(row)
+            d.audio_path = str(out); self.refresh(); self.list.setCurrentRow(row)
             self.status_message(f'✅ Озвучку створено: {out}')
-        except Exception as exc:
-            self.status_message(f'❌ TTS: {exc}')
+        except Exception as exc: self.status_message(f'❌ TTS: {exc}')
+
+    def _selected_clip(self):
+        main = self.window(); clips = getattr(main, 'montage_clips', [])
+        widget = getattr(main, 'montage_list', None); row = widget.currentRow() if widget else -1
+        if not (0 <= row < len(clips)):
+            self.status_message('Спочатку виберіть кліп на монтажній доріжці'); return None
+        return main, clips[row], row
 
     def mix_current_dialogue(self):
         row = self.list.currentRow()
-        if row < 0:
-            self.status_message('Спочатку виберіть репліку')
-            return
+        if row < 0: self.status_message('Спочатку виберіть репліку'); return
         d = self.track.items[row]
         if not getattr(d, 'audio_path', '') or not Path(d.audio_path).exists():
-            self.status_message('Спочатку згенеруйте озвучку цієї репліки')
-            return
-
-        main = self.window()
-        clips = getattr(main, 'montage_clips', [])
-        selected_row = getattr(main, 'montage_list', None)
-        if selected_row is not None:
-            selected_row = selected_row.currentRow()
-        else:
-            selected_row = -1
-        if not (0 <= selected_row < len(clips)):
-            self.status_message('Спочатку виберіть кліп на монтажній доріжці')
-            return
-        clip = clips[selected_row]
-        video_path = clip.get('path', '')
+            self.status_message('Спочатку згенеруйте озвучку цієї репліки'); return
+        selected = self._selected_clip()
+        if not selected: return
+        main, clip, selected_row = selected
         background_path = getattr(main, 'background_path', '')
         if not background_path or not Path(background_path).exists():
-            self.status_message('Спочатку натисніть «Прибрати голоси з вибраного уривка AI»')
-            return
-        clip_start = int(clip.get('start_ms', 0))
-        relative_start = max(0, int(d.start_ms) - clip_start)
-        out_dir = Path(tempfile.mkdtemp(prefix='filmdubua_dubbed_'))
-        out = out_dir / f'dubbed_clip_{selected_row+1:03d}_dialogue_{row+1:03d}.mp4'
+            self.status_message('Спочатку натисніть «Прибрати голоси з вибраного уривка AI»'); return
+        video_path = clip.get('path', '')
+        relative_start = max(0, int(d.start_ms))
+        out_dir = Path(tempfile.mkdtemp(prefix='filmdubua_dubbed_')); out = out_dir / f'dubbed_clip_{selected_row+1:03d}_dialogue_{row+1:03d}.mp4'
         try:
             result = mix_dialogue(video_path, background_path, d.audio_path, str(out), relative_start, d.volume)
-            self.status_message(f'✅ Готовий дубльований кліп: {result}')
-            if hasattr(main, 'player'):
-                main.player.open(result)
-            if hasattr(main, 'status'):
-                main.status.setText(f'🎬 Українську репліку накладено на кліп {selected_row + 1}')
-        except (DubbingError, Exception) as exc:
-            self.status_message(f'❌ Дубляж: {exc}')
+            self.status_message(f'✅ Готова репліка на кліпі: {result}')
+            main.player.open(result); main.status.setText(f'🎬 Українську репліку накладено на кліп {selected_row+1}')
+        except Exception as exc: self.status_message(f'❌ Дубляж: {exc}')
+
+    def mix_all_dialogues(self):
+        selected = self._selected_clip()
+        if not selected: return
+        main, clip, selected_row = selected
+        background_path = getattr(main, 'background_path', '')
+        if not background_path or not Path(background_path).exists():
+            self.status_message('Спочатку натисніть «Прибрати голоси з вибраного уривка AI»'); return
+        ready = [d for d in self.track.items if getattr(d, 'audio_path', '') and Path(d.audio_path).exists()]
+        if not ready:
+            self.status_message('Спочатку згенеруйте українську озвучку хоча б для однієї репліки'); return
+        try:
+            out_dir = Path(tempfile.mkdtemp(prefix='filmdubua_full_dub_')); out = out_dir / f'dubbed_clip_{selected_row+1:03d}_FULL.mp4'
+            result = mix_dialogues(clip.get('path',''), background_path, ready, str(out))
+            self.status_message(f'✅ Весь дубляж зібрано: {result}')
+            main.player.open(result); main.status.setText(f'🎞️ Весь дубляж зібрано для кліпу {selected_row+1}: {len(ready)} реплік')
+        except Exception as exc: self.status_message(f'❌ Весь дубляж: {exc}')
 
     def status_message(self, text):
         parent = self.window()
-        if hasattr(parent, 'status'):
-            parent.status.setText(text)
+        if hasattr(parent, 'status'): parent.status.setText(text)
