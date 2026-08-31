@@ -13,6 +13,7 @@ class Dialogue:
     pitch: float = 0.0
     reverb: float = 0.0
     pan: float = 0.0
+    audio_path: str = ''
 
 class DialogueTrack:
     def __init__(self):
