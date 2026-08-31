@@ -7,7 +7,7 @@ class FinalExportError(RuntimeError):
 
 
 def export_final(video: str, audio: str, reaction: str, output: str, subtitles: str = '', reaction_scale: float = .34) -> str:
-    """Compose a 9:16 final video with the dubbed/main audio and reaction overlay."""
+    """Compose a 9:16 final video: main clip on top, user video on bottom, black padding when needed."""
     main = Path(video).resolve()
     rx = Path(reaction).resolve() if reaction else None
     separate_audio = Path(audio).resolve() if audio else None
@@ -21,25 +21,25 @@ def export_final(video: str, audio: str, reaction: str, output: str, subtitles: 
     if separate_audio and not separate_audio.exists():
         raise FileNotFoundError(str(separate_audio))
 
-    base = '[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[base]'
-    filters = [base]
+    # 1080x1920 canvas split into two 1080x960 panels.
+    # Both videos keep their original aspect ratio: no cropping or stretching.
+    filters = [
+        "[0:v]scale=1080:960:force_original_aspect_ratio=decrease,pad=1080:960:(ow-iw)/2:(oh-ih)/2:color=black[top]"
+    ]
+
     if subtitles:
         sub = str(Path(subtitles).resolve()).replace('\\', '/').replace(':', '\\:')
-        filters.append(f"[base]subtitles='{sub}'[subbed]")
-        base_label = 'subbed'
+        filters.append(f"[top]subtitles='{sub}'[topsub]")
+        top_label = 'topsub'
     else:
-        base_label = 'base'
+        top_label = 'top'
 
     if rx:
-        size = max(160, min(900, int(1080 * float(reaction_scale))))
-        radius = size / 2
-        circle = f"if(lte((X-{radius})*(X-{radius})+(Y-{radius})*(Y-{radius}),{radius}*{radius}),255,0)"
         filters.append(
-            f"[1:v]scale={size}:{size}:force_original_aspect_ratio=increase,"
-            f"crop={size}:{size},format=rgba,"
-            f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='{circle}'[rx]"
+            "[1:v]scale=1080:960:force_original_aspect_ratio=decrease,"
+            "pad=1080:960:(ow-iw)/2:(oh-ih)/2:color=black[bottom]"
         )
-        filters.append(f"[{base_label}][rx]overlay=(W-w)/2:H-h-35:format=auto[v]")
+        filters.append(f"[{top_label}][bottom]vstack=inputs=2[v]")
         filter_graph = ';'.join(filters)
         inputs = ['-i', str(main), '-i', str(rx)]
         if separate_audio:
@@ -47,23 +47,27 @@ def export_final(video: str, audio: str, reaction: str, output: str, subtitles: 
             audio_index = '2:a:0'
         else:
             audio_index = '0:a:0?'
-        cmd = ['ffmpeg', '-y', *inputs, '-filter_complex', filter_graph,
-               '-map', '[v]', '-map', audio_index, '-shortest',
-               '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
-               '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
-               '-movflags', '+faststart', str(out)]
     else:
+        # No reaction video: keep the main clip centered in the upper panel and black below.
+        filters.append("color=c=black:s=1080x960:d=86400[bottom]")
+        filters.append(f"[{top_label}][bottom]vstack=inputs=2[v]")
         filter_graph = ';'.join(filters)
-        audio_index = '1:a:0' if separate_audio else '0:a:0?'
-        inputs = ['-i', str(main)] + (['-i', str(separate_audio)] if separate_audio else [])
-        cmd = ['ffmpeg', '-y', *inputs, '-filter_complex', filter_graph,
-               '-map', '[subbed]' if subtitles else '[base]', '-map', audio_index,
-               '-shortest', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
-               '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
-               '-movflags', '+faststart', str(out)]
+        inputs = ['-i', str(main)]
+        if separate_audio:
+            inputs += ['-i', str(separate_audio)]
+            audio_index = '1:a:0'
+        else:
+            audio_index = '0:a:0?'
+
+    cmd = ['ffmpeg', '-y', *inputs, '-filter_complex', filter_graph,
+           '-map', '[v]', '-map', audio_index, '-shortest',
+           '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+           '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
+           '-movflags', '+faststart', str(out)]
 
     print('\n' + '=' * 80, flush=True)
     print('FILMDUBUA FINAL EXPORT', flush=True)
+    print('Layout: MAIN TOP 1080x960 + USER VIDEO BOTTOM 1080x960', flush=True)
     print('FFmpeg command:', ' '.join(cmd), flush=True)
     print('=' * 80, flush=True)
 
